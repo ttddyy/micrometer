@@ -20,6 +20,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.LoggerContextListener;
 import ch.qos.logback.classic.turbo.TurboFilter;
+import ch.qos.logback.core.Context;
 import ch.qos.logback.core.spi.FilterReply;
 import io.micrometer.common.lang.NonNullApi;
 import io.micrometer.common.lang.NonNullFields;
@@ -31,8 +32,7 @@ import io.micrometer.core.instrument.binder.MeterBinder;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 import static java.util.Collections.emptyList;
 
@@ -198,6 +198,8 @@ class MetricsTurboFilter extends TurboFilter {
             .register(registry);
     }
 
+    private static final String THREAD_IDS_TO_IGNORE_METRICS = "threadIdsToIgnoreMetrics";
+
     @Override
     public FilterReply decide(Marker marker, Logger logger, Level level, String format, Object[] params, Throwable t) {
         // When filter is asked for decision for an isDebugEnabled call or similar test,
@@ -212,12 +214,25 @@ class MetricsTurboFilter extends TurboFilter {
             return FilterReply.NEUTRAL;
         }
 
+        long threadId = Thread.currentThread().getId();
+        Context context = getContext();
+        Set<Long> threadIdsToIgnoreMetrics = (Set<Long>) context.getObject(THREAD_IDS_TO_IGNORE_METRICS);
+        if (threadIdsToIgnoreMetrics != null && threadIdsToIgnoreMetrics.contains(threadId)) {
+            return FilterReply.NEUTRAL;
+        }
+
         Boolean ignored = LogbackMetrics.ignoreMetrics.get();
         if (ignored != null && ignored) {
             return FilterReply.NEUTRAL;
         }
 
-        LogbackMetrics.ignoreMetrics(() -> recordMetrics(level));
+        if (threadIdsToIgnoreMetrics == null) {
+            threadIdsToIgnoreMetrics = Collections.synchronizedSet(new HashSet<>());
+            context.putObject(THREAD_IDS_TO_IGNORE_METRICS, threadIdsToIgnoreMetrics);
+        }
+        threadIdsToIgnoreMetrics.add(threadId);
+        recordMetrics(level);
+        threadIdsToIgnoreMetrics.remove(threadId);
 
         return FilterReply.NEUTRAL;
     }
